@@ -137,19 +137,22 @@ class TelemetryProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> resetCounter() async {
-    await _bleService.sendResetCommand();
-    _telemetry = _telemetry.copyWith(
-      dripCount: 0,
-      dpm: 0.0,
-      flowStatus: "READY",
-      lastUpdated: DateTime.now(),
-    );
-    _isInfusionSessionActive = false;
-    _flowingDurationSeconds = 0;
-    _showFlowStoppedWarning = false;
-    _hasAlreadyNotifiedStopped = false;
-    notifyListeners();
+  Future<bool> resetCounter() async {
+    bool success = await _bleService.sendResetCommand();
+    if (success) {
+      _telemetry = _telemetry.copyWith(
+        dripCount: 0,
+        dpm: 0.0,
+        flowStatus: "READY",
+        lastUpdated: DateTime.now(),
+      );
+      _isInfusionSessionActive = false;
+      _flowingDurationSeconds = 0;
+      _showFlowStoppedWarning = false;
+      _hasAlreadyNotifiedStopped = false;
+      notifyListeners();
+    }
+    return success;
   }
 
   @override

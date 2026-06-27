@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../providers/ble_provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../widgets/custom_card.dart';
+import 'device_discovery_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({Key? key}) : super(key: key);
@@ -101,8 +102,9 @@ class SettingsScreen extends StatelessWidget {
                       title: const Text("Disconnect Device", style: TextStyle(color: AppColors.statusStopped, fontWeight: FontWeight.bold)),
                       onTap: () {
                         bleProv.disconnect();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text("Disconnected from Smart IV Monitor.")),
+                        Navigator.of(context).pushAndRemoveUntil(
+                          MaterialPageRoute(builder: (_) => const DeviceDiscoveryScreen()),
+                          (route) => false,
                         );
                       },
                     ),

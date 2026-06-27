@@ -5,6 +5,7 @@ import 'providers/ble_provider.dart';
 import 'providers/telemetry_provider.dart';
 import 'providers/wifi_setup_provider.dart';
 import 'presentation/screens/main_navigation_screen.dart';
+import 'presentation/screens/device_discovery_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,8 +33,23 @@ class SmartIvMonitorApp extends StatelessWidget {
         title: 'Smart IV Monitor',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.lightTheme,
-        home: const MainNavigationScreen(),
+        home: const AppRootRouter(),
       ),
     );
+  }
+}
+
+class AppRootRouter extends StatelessWidget {
+  const AppRootRouter({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final bleProv = Provider.of<BleProvider>(context);
+
+    if (bleProv.isConnected) {
+      return const MainNavigationScreen();
+    } else {
+      return const DeviceDiscoveryScreen();
+    }
   }
 }

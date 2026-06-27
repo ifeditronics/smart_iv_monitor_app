@@ -1,7 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/constants/ble_uuids.dart';
+import '../models/telemetry_model.dart';
 
 enum BleConnectionState {
   disconnected,
@@ -10,9 +14,39 @@ enum BleConnectionState {
   synchronizing,
   connected,
   failed,
+  bluetoothOff,
+  permissionDenied,
+}
+
+class DiscoveredBleDevice {
+  final BluetoothDevice device;
+  final String name;
+  final int rssi;
+
+  DiscoveredBleDevice({
+    required this.device,
+    required this.name,
+    required this.rssi,
+  });
+
+  SignalQuality get signalQuality {
+    if (rssi >= -60) return SignalQuality.excellent;
+    if (rssi >= -75) return SignalQuality.good;
+    if (rssi >= -85) return SignalQuality.weak; // Treated as Fair/Weak
+    return SignalQuality.weak;
+  }
+
+  String get signalQualityStr {
+    if (rssi >= -60) return "Excellent";
+    if (rssi >= -75) return "Good";
+    if (rssi >= -85) return "Fair";
+    return "Weak";
+  }
 }
 
 class BleService {
+  static const String keyLastDeviceId = "last_connected_device_id";
+
   BluetoothDevice? _targetDevice;
   BluetoothCharacteristic? _charDripCount;
   BluetoothCharacteristic? _charDpm;
@@ -28,6 +62,9 @@ class BleService {
 
   final _connectionStateController = StreamController<BleConnectionState>.broadcast();
   Stream<BleConnectionState> get connectionStateStream => _connectionStateController.stream;
+
+  final _discoveredDevicesController = StreamController<List<DiscoveredBleDevice>>.broadcast();
+  Stream<List<DiscoveredBleDevice>> get discoveredDevicesStream => _discoveredDevicesController.stream;
 
   final _dripCountController = StreamController<int>.broadcast();
   Stream<int> get dripCountStream => _dripCountController.stream;
@@ -50,83 +87,183 @@ class BleService {
   BleConnectionState _currentState = BleConnectionState.disconnected;
   BleConnectionState get currentState => _currentState;
 
+  final List<DiscoveredBleDevice> _discoveredList = [];
+
   void _updateState(BleConnectionState newState) {
     _currentState = newState;
     _connectionStateController.add(newState);
   }
 
-  Future<void> startAutoScanAndConnect() async {
-    if (_currentState == BleConnectionState.connecting || _currentState == BleConnectionState.connected) return;
+  Future<bool> requestPermissions() async {
+    if (Platform.isAndroid) {
+      Map<Permission, PermissionStatus> statuses = await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.location,
+      ].request();
 
+      if (statuses[Permission.bluetoothScan]?.isDenied == true ||
+          statuses[Permission.bluetoothConnect]?.isDenied == true) {
+        _updateState(BleConnectionState.permissionDenied);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Future<bool> ensureBluetoothOn() async {
+    BluetoothAdapterState adapterState = await FlutterBluePlus.adapterState.first;
+    if (adapterState != BluetoothAdapterState.on) {
+      if (Platform.isAndroid) {
+        try {
+          await FlutterBluePlus.turnOn();
+        } catch (_) {}
+      }
+      _updateState(BleConnectionState.bluetoothOff);
+      return false;
+    }
+    return true;
+  }
+
+  Future<bool> attemptAutoReconnect() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? savedId = prefs.getString(keyLastDeviceId);
+
+    if (savedId == null || savedId.isEmpty) return false;
+
+    bool permOk = await requestPermissions();
+    if (!permOk) return false;
+    bool btOk = await ensureBluetoothOn();
+    if (!btOk) return false;
+
+    _updateState(BleConnectionState.connecting);
+    try {
+      BluetoothDevice device = BluetoothDevice.fromId(savedId);
+      await device.connect(autoConnect: false, timeout: const Duration(seconds: 5));
+      _targetDevice = device;
+      
+      _updateState(BleConnectionState.synchronizing);
+      await _discoverAndSetupCharacteristics(device);
+      _updateState(BleConnectionState.connected);
+      _setupDisconnectListener(device);
+      return true;
+    } catch (e) {
+      _updateState(BleConnectionState.disconnected);
+      return false;
+    }
+  }
+
+  Future<void> startScan() async {
+    bool permOk = await requestPermissions();
+    if (!permOk) return;
+    bool btOk = await ensureBluetoothOn();
+    if (!btOk) return;
+
+    _discoveredList.clear();
+    _discoveredDevicesController.add(List.from(_discoveredList));
     _updateState(BleConnectionState.searching);
 
     try {
-      // Listen to scan results
-      var subscription = FlutterBluePlus.scanResults.listen((results) async {
+      await FlutterBluePlus.stopScan();
+
+      FlutterBluePlus.scanResults.listen((results) {
         for (ScanResult r in results) {
-          if (r.device.platformName == "Smart IV Monitor" ||
-              r.advertisementData.serviceUuids.contains(Guid(BleUuids.serviceUuid))) {
-            _targetDevice = r.device;
-            await FlutterBluePlus.stopScan();
-            await _connectToDevice(_targetDevice!);
-            break;
+          String devName = r.device.platformName.trim();
+          bool matchesUuid = r.advertisementData.serviceUuids.contains(Guid(BleUuids.serviceUuid));
+          bool matchesName = devName.toLowerCase().contains("smart iv") || devName.toLowerCase().contains("drip");
+
+          if (matchesUuid || matchesName || devName == "Smart IV Monitor") {
+            String displayName = devName.isNotEmpty ? devName : "Smart IV Monitor";
+            int index = _discoveredList.indexWhere((element) => element.device.remoteId == r.device.remoteId);
+            DiscoveredBleDevice item = DiscoveredBleDevice(
+              device: r.device,
+              name: displayName,
+              rssi: r.rssi,
+            );
+
+            if (index >= 0) {
+              _discoveredList[index] = item;
+            } else {
+              _discoveredList.add(item);
+            }
+            _discoveredDevicesController.add(List.from(_discoveredList));
           }
         }
       });
 
-      // Start scan
       await FlutterBluePlus.startScan(
-        withServices: [Guid(BleUuids.serviceUuid)],
         timeout: const Duration(seconds: 15),
       );
-
-      await Future.delayed(const Duration(seconds: 15));
-      if (_currentState == BleConnectionState.searching) {
-        _updateState(BleConnectionState.failed);
-      }
-      subscription.cancel();
     } catch (e) {
       _updateState(BleConnectionState.failed);
     }
   }
 
-  Future<void> _connectToDevice(BluetoothDevice device) async {
-    _updateState(BleConnectionState.connecting);
+  Future<void> stopScan() async {
     try {
-      await device.connect(autoConnect: true, timeout: const Duration(seconds: 10));
-      
-      // Listen to connection state shifts
-      device.connectionState.listen((state) {
-        if (state == BluetoothConnectionState.disconnected && _currentState == BleConnectionState.connected) {
-          _updateState(BleConnectionState.disconnected);
-          startAutoScanAndConnect(); // Auto reconnect
-        }
-      });
+      await FlutterBluePlus.stopScan();
+    } catch (_) {}
+  }
+
+  Future<bool> connectToSelectedDevice(DiscoveredBleDevice target) async {
+    await stopScan();
+    _updateState(BleConnectionState.connecting);
+
+    try {
+      await target.device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
+      _targetDevice = target.device;
 
       _updateState(BleConnectionState.synchronizing);
-      await _discoverAndSetupCharacteristics(device);
-      _updateState(BleConnectionState.connected);
-      
-      // Monitor RSSI
-      Timer.periodic(const Duration(seconds: 5), (timer) async {
-        if (_currentState == BleConnectionState.connected && _targetDevice != null) {
-          try {
-            int rssi = await _targetDevice!.readRssi();
-            _rssiController.add(rssi);
-          } catch (_) {}
-        } else {
-          timer.cancel();
-        }
-      });
+      bool verified = await _discoverAndSetupCharacteristics(target.device);
+
+      if (verified) {
+        SharedPreferences prefs = await SharedPreferences.getInstance();
+        await prefs.setString(keyLastDeviceId, target.device.remoteId.str);
+
+        _updateState(BleConnectionState.connected);
+        _setupDisconnectListener(target.device);
+        return true;
+      } else {
+        await target.device.disconnect();
+        _updateState(BleConnectionState.failed);
+        return false;
+      }
     } catch (e) {
       _updateState(BleConnectionState.failed);
+      return false;
     }
   }
 
-  Future<void> _discoverAndSetupCharacteristics(BluetoothDevice device) async {
+  void _setupDisconnectListener(BluetoothDevice device) {
+    device.connectionState.listen((state) async {
+      if (state == BluetoothConnectionState.disconnected && _currentState == BleConnectionState.connected) {
+        _updateState(BleConnectionState.disconnected);
+        bool reconnected = await attemptAutoReconnect();
+        if (!reconnected) {
+          startScan();
+        }
+      }
+    });
+
+    Timer.periodic(const Duration(seconds: 5), (timer) async {
+      if (_currentState == BleConnectionState.connected && _targetDevice != null) {
+        try {
+          int rssi = await _targetDevice!.readRssi();
+          _rssiController.add(rssi);
+        } catch (_) {}
+      } else {
+        timer.cancel();
+      }
+    });
+  }
+
+  Future<bool> _discoverAndSetupCharacteristics(BluetoothDevice device) async {
     List<BluetoothService> services = await device.discoverServices();
+    bool serviceFound = false;
+
     for (var service in services) {
       if (service.uuid.toString().toLowerCase() == BleUuids.serviceUuid.toLowerCase()) {
+        serviceFound = true;
         for (var c in service.characteristics) {
           String uuid = c.uuid.toString().toLowerCase();
           if (uuid == BleUuids.charDripCount.toLowerCase()) _charDripCount = c;
@@ -144,7 +281,8 @@ class BleService {
       }
     }
 
-    // Subscribe to notifications
+    if (!serviceFound) return false;
+
     if (_charDripCount != null) {
       await _charDripCount!.setNotifyValue(true);
       _charDripCount!.lastValueStream.listen((data) {
@@ -187,30 +325,70 @@ class BleService {
         _batteryController.add(bat);
       });
     }
+
+    return true;
   }
 
-  Future<void> sendResetCommand() async {
+  Future<bool> sendResetCommand() async {
     if (_charResetCounter != null) {
-      await _charResetCounter!.write(utf8.encode("RESET"));
+      try {
+        print("[BLE Write] Sending 'RESET' to characteristic ${BleUuids.charResetCounter}...");
+        await _charResetCounter!.write(utf8.encode("RESET"), withoutResponse: false);
+        print("[BLE Write] RESET command successfully transmitted to ESP32.");
+        return true;
+      } catch (e) {
+        print("[BLE Write Error] Failed to send RESET command: $e");
+        return false;
+      }
+    } else {
+      print("[BLE Write Error] _charResetCounter is null!");
+      return false;
     }
   }
 
-  Future<void> writeWifiSsid(String ssid) async {
+  Future<bool> writeWifiSsid(String ssid) async {
     if (_charWifiSsid != null) {
-      await _charWifiSsid!.write(utf8.encode(ssid));
+      try {
+        print("[BLE Write] Sending SSID '$ssid' to characteristic ${BleUuids.charWifiSsid}...");
+        await _charWifiSsid!.write(utf8.encode(ssid), withoutResponse: false);
+        print("[BLE Write] SSID successfully transmitted to ESP32.");
+        return true;
+      } catch (e) {
+        print("[BLE Write Error] Failed to write SSID: $e");
+        return false;
+      }
     }
+    return false;
   }
 
-  Future<void> writeWifiPassword(String password) async {
+  Future<bool> writeWifiPassword(String password) async {
     if (_charWifiPass != null) {
-      await _charWifiPass!.write(utf8.encode(password));
+      try {
+        print("[BLE Write] Sending Password to characteristic ${BleUuids.charWifiPass}...");
+        await _charWifiPass!.write(utf8.encode(password), withoutResponse: false);
+        print("[BLE Write] Password successfully transmitted to ESP32.");
+        return true;
+      } catch (e) {
+        print("[BLE Write Error] Failed to write Password: $e");
+        return false;
+      }
     }
+    return false;
   }
 
-  Future<void> sendReconnectWifiCommand() async {
+  Future<bool> sendReconnectWifiCommand() async {
     if (_charReconnectWifi != null) {
-      await _charReconnectWifi!.write(utf8.encode("1"));
+      try {
+        print("[BLE Write] Sending Reconnect command '1' to characteristic ${BleUuids.charReconnectWifi}...");
+        await _charReconnectWifi!.write(utf8.encode("1"), withoutResponse: false);
+        print("[BLE Write] Reconnect command successfully transmitted to ESP32.");
+        return true;
+      } catch (e) {
+        print("[BLE Write Error] Failed to send Reconnect command: $e");
+        return false;
+      }
     }
+    return false;
   }
 
   Future<String> readDeviceInfo() async {
