@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 import 'core/theme/app_theme.dart';
 import 'providers/ble_provider.dart';
 import 'providers/telemetry_provider.dart';
-import 'providers/wifi_setup_provider.dart';
 import 'presentation/screens/main_navigation_screen.dart';
 import 'presentation/screens/device_discovery_screen.dart';
 
@@ -21,12 +20,8 @@ class SmartIvMonitorApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => BleProvider()),
         ChangeNotifierProxyProvider<BleProvider, TelemetryProvider>(
-          create: (ctx) => TelemetryProvider(Provider.of<BleProvider>(ctx, listen: false).bleService),
-          update: (ctx, ble, previous) => previous ?? TelemetryProvider(ble.bleService),
-        ),
-        ChangeNotifierProxyProvider<BleProvider, WifiSetupProvider>(
-          create: (ctx) => WifiSetupProvider(Provider.of<BleProvider>(ctx, listen: false).bleService),
-          update: (ctx, ble, previous) => previous ?? WifiSetupProvider(ble.bleService),
+          create: (ctx) => TelemetryProvider(Provider.of<BleProvider>(ctx, listen: false).networkService),
+          update: (ctx, ble, previous) => previous ?? TelemetryProvider(ble.networkService),
         ),
       ],
       child: MaterialApp(

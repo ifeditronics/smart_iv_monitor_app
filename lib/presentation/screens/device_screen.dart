@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/ble_provider.dart';
-import '../../providers/telemetry_provider.dart';
 import '../../data/models/device_info_model.dart';
 import '../../core/constants/app_colors.dart';
 import '../widgets/custom_card.dart';
@@ -27,58 +26,37 @@ class _DeviceScreenState extends State<DeviceScreen> {
     setState(() => _isLoading = true);
     final bleProv = Provider.of<BleProvider>(context, listen: false);
     if (bleProv.isConnected) {
-      String raw = await bleProv.bleService.readDeviceInfo();
-      if (raw.isNotEmpty) {
+      final map = await bleProv.networkService.getDeviceInfo();
+      if (map != null) {
         setState(() {
-          _info = DeviceInfoModel.parseRawString(raw);
+          _info = DeviceInfoModel(
+            deviceName: "Smart IV Monitor",
+            firmwareVersion: map['firmwareVersion'] ?? "v1.0.0",
+            chipModel: map['chipModel'] ?? "ESP32",
+            flashSize: "${map['flashMb'] ?? 4} MB",
+            macAddress: map['mac'] ?? "00:00:00:00:00:00",
+            buildDate: map['buildDate'] ?? "",
+            otaStatus: "Ready",
+          );
         });
       }
     }
     setState(() => _isLoading = false);
   }
 
-  Widget _buildInfoTile(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.electricOrange.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: AppColors.electricOrange, size: 24),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: const TextStyle(fontSize: 16, color: AppColors.textPrimary, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final telemetry = Provider.of<TelemetryProvider>(context).telemetry;
+    final bleProv = Provider.of<BleProvider>(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Device Info"),
+        title: const Text("Device Status"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            onPressed: _loadDeviceInfo,
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -87,36 +65,49 @@ class _DeviceScreenState extends State<DeviceScreen> {
             CustomCard(
               child: Column(
                 children: [
-                  _buildInfoTile(Icons.medical_services_rounded, "Device Name", _info.deviceName),
-                  const Divider(color: AppColors.borderLight),
-                  _buildInfoTile(Icons.system_update_rounded, "Firmware Version", _info.firmwareVersion),
-                  const Divider(color: AppColors.borderLight),
-                  _buildInfoTile(Icons.memory_rounded, "Chip Model", _info.chipModel),
-                  const Divider(color: AppColors.borderLight),
-                  _buildInfoTile(Icons.sd_card_rounded, "Flash Size", _info.flashSize),
-                  const Divider(color: AppColors.borderLight),
-                  _buildInfoTile(Icons.qr_code_rounded, "MAC Address", _info.macAddress),
+                  const Icon(Icons.medical_services_rounded, size: 48, color: AppColors.electricOrange),
+                  const SizedBox(height: 12),
+                  Text(
+                    _info.deviceName,
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    "FW: ${_info.firmwareVersion}",
+                    style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                  ),
                 ],
               ),
             ),
+            const SizedBox(height: 16),
             CustomCard(
               child: Column(
                 children: [
-                  _buildInfoTile(Icons.wifi_rounded, "WiFi Status", telemetry.wifiStatus),
-                  const Divider(color: AppColors.borderLight),
-                  _buildInfoTile(Icons.lan_rounded, "IP Address", telemetry.ipAddress),
-                  const Divider(color: AppColors.borderLight),
-                  _buildInfoTile(Icons.cloud_upload_rounded, "OTA Status", _info.otaStatus),
+                  ListTile(
+                    leading: const Icon(Icons.memory_rounded, color: AppColors.electricOrange),
+                    title: const Text("Microcontroller"),
+                    trailing: Text(_info.chipModel, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.sd_card_rounded, color: AppColors.electricOrange),
+                    title: const Text("Flash Memory"),
+                    trailing: Text(_info.flashSize, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.fingerprint_rounded, color: AppColors.electricOrange),
+                    title: const Text("MAC Address"),
+                    trailing: Text(_info.macAddress, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.calendar_today_rounded, color: AppColors.electricOrange),
+                    title: const Text("Build Date"),
+                    trailing: Text(_info.buildDate, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
                 ],
               ),
-            ),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: _isLoading ? null : _loadDeviceInfo,
-              icon: _isLoading
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.refresh_rounded),
-              label: Text(_isLoading ? "REFRESHING..." : "REFRESH INFO"),
             ),
           ],
         ),

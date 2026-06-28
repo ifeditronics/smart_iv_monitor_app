@@ -16,9 +16,9 @@ class SettingsScreen extends StatelessWidget {
         title: const Text("IV Monitor Help"),
         content: const SingleChildScrollView(
           child: Text(
-            "1. Auto Connection: The app scans and connects automatically to the Smart IV Monitor.\n\n"
-            "2. Live Telemetry: Drip count and flow rates update in real time via Bluetooth notifications.\n\n"
-            "3. Flow Stopped Alarm: An infusion monitoring session activates after 60 seconds of continuous flow. If flow stops, an urgent alarm sounds.\n\n"
+            "1. Wi-Fi Connection: Connect your phone to the same Wi-Fi network as the Smart IV Monitor.\n\n"
+            "2. Live Telemetry: Drip count and flow rates update in real time via WebSockets.\n\n"
+            "3. Flow Stopped Alarm: An infusion monitoring session activates after continuous flow. If flow stops, an urgent alarm sounds.\n\n"
             "4. Reset Counter: Press RESET COUNTER on the Dashboard to start a new infusion session.",
             style: TextStyle(fontSize: 15, height: 1.4),
           ),
@@ -95,11 +95,13 @@ class SettingsScreen extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 8),
+
+                  const SizedBox(height: 16),
+
                   CustomCard(
                     child: ListTile(
-                      leading: const Icon(Icons.bluetooth_disabled_rounded, color: AppColors.statusStopped),
-                      title: const Text("Disconnect Device", style: TextStyle(color: AppColors.statusStopped, fontWeight: FontWeight.bold)),
+                      leading: const Icon(Icons.power_settings_new_rounded, color: AppColors.statusStopped),
+                      title: const Text("Disconnect Session", style: TextStyle(color: AppColors.statusStopped, fontWeight: FontWeight.bold)),
                       onTap: () {
                         bleProv.disconnect();
                         Navigator.of(context).pushAndRemoveUntil(
@@ -112,7 +114,6 @@ class SettingsScreen extends StatelessWidget {
                 ],
               ),
             ),
-            // Subtle, understated footer
             const Padding(
               padding: EdgeInsets.only(bottom: 12.0, top: 8.0),
               child: Text(

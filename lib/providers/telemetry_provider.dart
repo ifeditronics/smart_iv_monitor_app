@@ -4,155 +4,105 @@ import 'package:flutter/services.dart';
 import 'package:vibration/vibration.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../../data/models/telemetry_model.dart';
-import '../../data/ble/ble_service.dart';
+import '../../data/network/network_service.dart';
 
 class TelemetryProvider with ChangeNotifier {
-  final BleService _bleService;
+  final NetworkService _networkService;
   TelemetryModel _telemetry = TelemetryModel.initial();
 
-  // Streams Subscriptions
   StreamSubscription? _dripSub;
   StreamSubscription? _dpmSub;
   StreamSubscription? _flowSub;
   StreamSubscription? _wifiSub;
   StreamSubscription? _batterySub;
-  StreamSubscription? _rssiSub;
 
-  // Infusion Session & Alarm Tracking
-  Timer? _sessionTimer;
-  int _flowingDurationSeconds = 0;
-  bool _isInfusionSessionActive = false;
   bool _showFlowStoppedWarning = false;
-  bool _hasAlreadyNotifiedStopped = false;
+  FlutterLocalNotificationsPlugin? _notificationsPlugin;
 
-  // Local Notifications Plugin
-  final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
-
-  TelemetryProvider(this._bleService) {
-    _initLocalNotifications();
-
-    _dripSub = _bleService.dripCountStream.listen((count) {
-      _telemetry = _telemetry.copyWith(dripCount: count, lastUpdated: DateTime.now());
-      notifyListeners();
-    });
-
-    _dpmSub = _bleService.dpmStream.listen((dpm) {
-      _telemetry = _telemetry.copyWith(dpm: dpm, lastUpdated: DateTime.now());
-      notifyListeners();
-    });
-
-    _flowSub = _bleService.flowStatusStream.listen((status) {
-      _handleFlowStatusChange(status);
-    });
-
-    _wifiSub = _bleService.wifiStatusStream.listen((wifi) {
-      _telemetry = _telemetry.copyWith(wifiStatus: wifi, lastUpdated: DateTime.now());
-      notifyListeners();
-    });
-
-    _batterySub = _bleService.batteryStream.listen((bat) {
-      _telemetry = _telemetry.copyWith(batteryLevel: bat, lastUpdated: DateTime.now());
-      notifyListeners();
-    });
-
-    _rssiSub = _bleService.rssiStream.listen((rssi) {
-      _telemetry = _telemetry.copyWith(rssi: rssi, lastUpdated: DateTime.now());
-      notifyListeners();
-    });
+  TelemetryProvider(this._networkService) {
+    _initNotifications();
+    _subscribeToStreams();
   }
 
   TelemetryModel get telemetry => _telemetry;
   bool get showFlowStoppedWarning => _showFlowStoppedWarning;
-  bool get isInfusionSessionActive => _isInfusionSessionActive;
+  bool get isResetReady => _networkService.isResetReady;
+  String get debugStatus => "STATION_WIFI_OK";
 
-  Future<void> _initLocalNotifications() async {
-    const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const DarwinInitializationSettings iosSettings = DarwinInitializationSettings();
-    const InitializationSettings settings = InitializationSettings(android: androidSettings, iOS: iosSettings);
-    await _notificationsPlugin.initialize(settings);
+  void _initNotifications() async {
+    _notificationsPlugin = FlutterLocalNotificationsPlugin();
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const iosInit = DarwinInitializationSettings();
+    const initSettings = InitializationSettings(android: androidInit, iOS: iosInit);
+    await _notificationsPlugin?.initialize(initSettings);
   }
 
-  void _handleFlowStatusChange(String status) {
-    _telemetry = _telemetry.copyWith(flowStatus: status, lastUpdated: DateTime.now());
+  void _subscribeToStreams() {
+    _dripSub = _networkService.dripCountStream.listen((count) {
+      _telemetry = _telemetry.copyWith(dripCount: count, lastUpdated: DateTime.now());
+      notifyListeners();
+    });
 
-    if (status == "FLOWING") {
-      // Auto-clear warning if flow resumes
-      _showFlowStoppedWarning = false;
-      _hasAlreadyNotifiedStopped = false;
+    _dpmSub = _networkService.dpmStream.listen((dpm) {
+      _telemetry = _telemetry.copyWith(dpm: dpm, lastUpdated: DateTime.now());
+      notifyListeners();
+    });
 
-      // Start 60-second stabilization timer if not already active
-      _sessionTimer ??= Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (_telemetry.flowStatus == "FLOWING") {
-          _flowingDurationSeconds++;
-          if (_flowingDurationSeconds >= 60) {
-            _isInfusionSessionActive = true;
-          }
-        } else {
-          _flowingDurationSeconds = 0;
-          timer.cancel();
-          _sessionTimer = null;
-        }
-      });
-    } else if (status == "STOPPED") {
-      _flowingDurationSeconds = 0;
-      _sessionTimer?.cancel();
-      _sessionTimer = null;
-
-      // Trigger alarm ONLY if monitoring session was active
-      if (_isInfusionSessionActive && !_hasAlreadyNotifiedStopped) {
-        _triggerFlowStoppedAlarm();
+    _flowSub = _networkService.flowStatusStream.listen((statusStr) {
+      String upper = statusStr.toUpperCase();
+      if (upper == "STOPPED" && _telemetry.flowStatus != "STOPPED") {
+        _triggerFlowStoppedAlert();
+      } else if (upper != "STOPPED") {
+        _showFlowStoppedWarning = false;
       }
-    }
+      _telemetry = _telemetry.copyWith(flowStatus: upper, lastUpdated: DateTime.now());
+      notifyListeners();
+    });
 
-    notifyListeners();
+    _wifiSub = _networkService.wifiStatusStream.listen((wifiStr) {
+      _telemetry = _telemetry.copyWith(wifiStatus: wifiStr, lastUpdated: DateTime.now());
+      notifyListeners();
+    });
+
+    _batterySub = _networkService.batteryStream.listen((bat) {
+      _telemetry = _telemetry.copyWith(batteryLevel: bat, lastUpdated: DateTime.now());
+      notifyListeners();
+    });
   }
 
-  Future<void> _triggerFlowStoppedAlarm() async {
+  void _triggerFlowStoppedAlert() async {
     _showFlowStoppedWarning = true;
-    _hasAlreadyNotifiedStopped = true;
+    notifyListeners();
 
-    // Vibrate phone
-    HapticFeedback.heavyImpact();
-    bool? hasVibrator = await Vibration.hasVibrator();
-    if (hasVibrator == true) {
-      Vibration.vibrate(pattern: [500, 1000, 500, 1000]);
-    }
+    try {
+      if (await Vibration.hasVibrator() ?? false) {
+        Vibration.vibrate(pattern: [0, 500, 200, 500]);
+      }
+    } catch (_) {}
 
-    // Trigger local notification
-    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'iv_flow_alarm_channel',
-      'IV Flow Alarm Notifications',
+    const androidDetails = AndroidNotificationDetails(
+      'iv_flow_alarm',
+      'IV Flow Alarms',
       importance: Importance.max,
       priority: Priority.high,
-      color: Color(0xFFE53935),
+      color: Colors.red,
     );
-    const NotificationDetails details = NotificationDetails(android: androidDetails);
-    await _notificationsPlugin.show(
-      101,
-      'IV Flow Stopped',
-      'No IV drops have been detected. Please check the patient\'s infusion immediately.',
-      details,
-    );
+    const notificationDetails = NotificationDetails(android: androidDetails, iOS: DarwinNotificationDetails());
 
-    notifyListeners();
+    await _notificationsPlugin?.show(
+      101,
+      'WARNING: IV FLOW STOPPED',
+      'The drip monitor detected that fluid infusion has stopped completely.',
+      notificationDetails,
+    );
+  }
+
+  Future<bool> sendResetCommand() async {
+    return await _networkService.sendResetCommand();
   }
 
   Future<bool> resetCounter() async {
-    bool success = await _bleService.sendResetCommand();
-    if (success) {
-      _telemetry = _telemetry.copyWith(
-        dripCount: 0,
-        dpm: 0.0,
-        flowStatus: "READY",
-        lastUpdated: DateTime.now(),
-      );
-      _isInfusionSessionActive = false;
-      _flowingDurationSeconds = 0;
-      _showFlowStoppedWarning = false;
-      _hasAlreadyNotifiedStopped = false;
-      notifyListeners();
-    }
-    return success;
+    return await sendResetCommand();
   }
 
   @override
@@ -162,8 +112,6 @@ class TelemetryProvider with ChangeNotifier {
     _flowSub?.cancel();
     _wifiSub?.cancel();
     _batterySub?.cancel();
-    _rssiSub?.cancel();
-    _sessionTimer?.cancel();
     super.dispose();
   }
 }

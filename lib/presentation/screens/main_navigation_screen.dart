@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dashboard_screen.dart';
 import 'device_screen.dart';
-import 'wifi_screen.dart';
 import 'settings_screen.dart';
 
 class MainNavigationScreen extends StatefulWidget {
@@ -17,7 +16,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   final List<Widget> _screens = const [
     DashboardScreen(),
     DeviceScreen(),
-    WifiScreen(),
     SettingsScreen(),
   ];
 
@@ -39,10 +37,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.medical_services_rounded),
             label: "Device",
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.wifi_rounded),
-            label: "WiFi",
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.settings_rounded),

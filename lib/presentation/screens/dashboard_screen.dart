@@ -46,9 +46,11 @@ class DashboardScreen extends StatelessWidget {
               backgroundColor: AppColors.electricOrange,
               minimumSize: const Size(120, 48),
             ),
-            onPressed: () {
-              Provider.of<TelemetryProvider>(context, listen: false).resetCounter();
-              Navigator.of(ctx).pop();
+            onPressed: () async {
+              print("[STAGE 1 CHECK] Nurse tapped YES, RESET button.");
+              bool sent = await Provider.of<TelemetryProvider>(context, listen: false).resetCounter();
+              print("[STAGE 1 RESULT] BleService.sendResetCommand result: $sent");
+              if (context.mounted) Navigator.of(ctx).pop();
             },
             child: const Text("YES, RESET"),
           ),
@@ -253,7 +255,7 @@ class DashboardScreen extends StatelessWidget {
 
             // Large Reset Counter Button
             ElevatedButton.icon(
-              onPressed: () => _showResetConfirmation(context),
+              onPressed: bleProv.isConnected ? () => _showResetConfirmation(context) : null,
               icon: const Icon(Icons.refresh_rounded, size: 28),
               label: const Text("RESET COUNTER"),
             ),
